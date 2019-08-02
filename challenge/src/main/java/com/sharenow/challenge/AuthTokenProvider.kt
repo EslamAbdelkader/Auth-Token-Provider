@@ -34,30 +34,30 @@ class AuthTokenProvider(
 
     private var token: AuthToken? = null
 
-    private val observable : Observable<String> by lazy {
-        isLoggedInObservable
-            .filter { loggedIn ->
-                if (!loggedIn) clearCache()
-                return@filter loggedIn
-            }
+    private val observable: Observable<String> by lazy {
+        val periodicObservable: Observable<Boolean> =
+            Observable.interval(0L, 1L, TimeUnit.SECONDS, computationScheduler)
+                .map { isTokenValid() }
+                .filter { !it }     // Emit if token is null or invalid
+
+        periodicObservable.subscribe { clearCache() }
+
+        // Clears cache if not logged in, and only emits if logged in
+        val loggedInObservable = isLoggedInObservable.filter { loggedIn ->
+            if (!loggedIn) clearCache()
+            return@filter loggedIn
+        }
+
+        Observable.merge(loggedInObservable, periodicObservable)
             .flatMap {
                 Observable.concat(
                     getFromCache().filter { it.isValid(currentTime) },
                     refreshAuthToken.doOnSuccess {
                         if (!it.isValid(currentTime)) throw RuntimeException()
                         saveInCache(it)
-                        computationScheduler.schedulePeriodicallyDirect({ if (token?.isValid(currentTime) == false) {
-                            clearCache()
-//                            observable.subscribe()
-                        }}, 1L, 1L, TimeUnit.MINUTES)
                     }.retry(1).toObservable()
                 ).firstElement().toObservable()
-                // get from cache ==> if exists, check valid ==> if valid emit
-
-                // else refreshToken ==> if fails retries once ==> then save in cache ==> then emit
-
             }
-            .retry(1)
             .filter { it.isValid(currentTime) }
             .map { it.token }
             .share()
