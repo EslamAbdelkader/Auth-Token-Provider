@@ -1,10 +1,11 @@
 package com.sharenow.challenge
 
 import io.reactivex.Observable
-import io.reactivex.Observable.never
 import io.reactivex.Scheduler
 import io.reactivex.Single
+import io.reactivex.functions.BiFunction
 import org.threeten.bp.ZonedDateTime
+import java.util.concurrent.TimeUnit
 
 class AuthTokenProvider(
 
@@ -31,10 +32,66 @@ class AuthTokenProvider(
     private val currentTime: () -> ZonedDateTime
 ) {
 
+    private var token: AuthToken? = null
+
+    private val observable : Observable<String> by lazy {
+        isLoggedInObservable
+            .filter { loggedIn ->
+                if (!loggedIn) clearCache()
+                return@filter loggedIn
+            }
+            .flatMap {
+                Observable.concat(
+                    getFromCache().filter { it.isValid(currentTime) },
+                    refreshAuthToken.doOnSuccess {
+                        if (!it.isValid(currentTime)) throw RuntimeException()
+                        saveInCache(it)
+                        computationScheduler.schedulePeriodicallyDirect({ if (token?.isValid(currentTime) == false) {
+                            clearCache()
+//                            observable.subscribe()
+                        }}, 1L, 1L, TimeUnit.MINUTES)
+                    }.retry(1).toObservable()
+                ).firstElement().toObservable()
+                // get from cache ==> if exists, check valid ==> if valid emit
+
+                // else refreshToken ==> if fails retries once ==> then save in cache ==> then emit
+
+            }
+            .retry(1)
+            .filter { it.isValid(currentTime) }
+            .map { it.token }
+            .share()
+    }
+
+    private fun isTokenValid(): Boolean = token?.isValid(currentTime) == true
+
+
+    private fun getFromCache(): Observable<AuthToken> {
+        return Observable.create {
+            if (token == null) {
+                if (!it.isDisposed) {
+                    it.onComplete()
+                }
+            } else {
+                if (!it.isDisposed) {
+                    it.onNext(token!!)
+                }
+            }
+        }
+    }
+
+    private fun saveInCache(token: AuthToken) {
+        this.token = token
+    }
+
+    private fun clearCache() {
+        token = null
+    }
+
     /**
      * @return the observable auth token as a string
      */
     fun observeToken(): Observable<String> {
-        return never() // TODO Fill this method with life
+        return observable
     }
 }
